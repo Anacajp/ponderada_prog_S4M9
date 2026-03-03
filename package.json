@@ -1,0 +1,22 @@
+{
+  "name": "ponderada-prog-s4m9",
+  "version": "1.0.0",
+  "description": "Business Drivers as Code — Aferição de regras de negócio da ASIS TaxTech (Grupo Sankhya)",
+  "scripts": {
+    "test": "jest",
+    "test:verbose": "jest --verbose",
+    "test:coverage": "jest --coverage",
+    "test:dn1": "jest --testPathPattern=dn1 --verbose",
+    "test:dn2": "jest --testPathPattern=dn2 --verbose",
+    "test:report": "jest --reporters=default --reporters=jest-html-reporters"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "form-data": "^4.0.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-html-reporters": "^3.1.7"
+  }
+}

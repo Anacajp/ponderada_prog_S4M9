@@ -1,0 +1,4 @@
+ESTE ARQUIVO NAO E UM SPED VALIDO
+linha sem pipe separador
+sem estrutura de registro fiscal
+1234567890abcdef

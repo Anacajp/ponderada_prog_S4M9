@@ -1,0 +1,20 @@
+# Dependências
+node_modules/
+
+# Credenciais — NUNCA versionar
+.env
+
+# Relatórios gerados em runtime
+reports/html/
+reports/evidence/
+
+# Coverage
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
