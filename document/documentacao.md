@@ -168,65 +168,150 @@ test('processoId inexistente deve retornar 404', async () => {
 
 ---
 
-## 2.2. Implementação em Código: Estrutura de Aferição de Regras
+## 2.2. Estratégia e Massa de Testes
 
-### Organização dos Testes por DN e Time
+### Técnicas de Teste Aplicadas
+
+| Técnica | Descrição | Onde aplicada |
+|---|---|---|
+| **Particionamento de Equivalência** | Agrupa entradas com comportamento idêntico; testa um representante por classe | Classes de arquivo: válido, vazio, corrompido, estrutura inválida |
+| **Análise de Valor Limite (BVA)** | Testa as fronteiras do domínio | HTTP 200 vs 201; exatamente no limite do timeout; 4xx vs 5xx |
+| **Teste de Regressão** | Garante que o comportamento correto se mantenha após mudanças | Testes unitários executam sempre, com ou sem credenciais |
+| **Blue/Red Team** | Blue = cenário feliz; Red = cenário adversário/ataque | Par Blue+Red para cada DN |
+| **Teste de Polling Assíncrono** | Afere comportamento de processos de longa duração com polling | `aguardarProcesso()` no DN2 Blue |
+| **Teste de Contrato de API** | Valida que a estrutura de resposta segue o contrato esperado | `processoId`, `arquivoId`, `auditorias` em todos os retornos |
+
+### Massa de Testes
+
+| ID | Arquivo | Classe | Tamanho | Uso | DNs |
+|---|---|---|---|---|---|
+| M1 | `test-data/sped-fiscal.txt` | Válida / Referência | ~400 B | Cenários Blue — estrutura SPED mínima válida | DN1, DN2 |
+| M2 | `test-data/arquivo_vazio.txt` | Adversa / Inválida | 0 bytes | Teste de rejeição de arquivo vazio | DN1 Red |
+| M3 | `test-data/arquivo_corrompido.bin` | Adversa / Inválida | ~12 bytes | Teste de rejeição de binário não-SPED | DN1 Red |
+| M4 | `test-data/arquivo_estrutura_invalida.txt` | Adversa / Inválida | ~80 bytes | Teste de rejeição de texto sem estrutura `|registro|` | DN1 Red |
+| M5 | `00000000-0000-0000-0000-000000000000` (constante) | Adversa | — | processoId inexistente para testes 404 | DN2 Red |
+| M6 | `nao-e-um-uuid-valido!!!` (constante) | Adversa | — | processoId malformado para testes 4xx | DN2 Red |
+
+> **Critério de validade de M1**: arquivo SPED começa com `|0000|` e contém registros terminais `|9999|`. Verificação automatizada no teste unitário `arquivo_estrutura_invalida.txt deve existir e não ser um SPED válido`.
+
+### Tabela Completa de Cenários
+
+| ID Cenário | DN | Time | Técnica | Massa | Entrada | Saída Esperada | Critério PASS |
+|---|---|---|---|---|---|---|---|
+| C01 | DN1 | Blue | Equivalência | M1 | SPED válido via POST /upload | HTTP 200 ou 201 | `status ∈ {200, 201}` |
+| C02 | DN1 | Blue | Contrato | M1 | SPED válido via POST /upload | `processoId` não nulo | `processoId` é string não vazia |
+| C03 | DN1 | Blue | Contrato | M1 | SPED válido via POST /upload | `arquivoId` para rastreabilidade | `arquivoId` é truthy |
+| C04 | DN1 | Blue | Valor Limite | M1 | SPED válido (~400 B) | Resposta em < 30s | `duracao < 30_000 ms` |
+| C05 | DN1 | Red | Equivalência | M2 | Arquivo vazio (0 bytes) | HTTP 4xx sem `processoId` | `status ≥ 400 && status < 500` |
+| C06 | DN1 | Red | Equivalência | M3 | Arquivo binário corrompido | HTTP 4xx sem `processoId` | `status ≥ 400 && status < 500` |
+| C07 | DN1 | Red | Equivalência | M4 | Estrutura SPED inválida | HTTP 4xx sem `processoId` | `status ≥ 400 && status < 500` |
+| C08 | DN1 | Red | Valor Limite | M2/M3/M4 | Qualquer entrada inválida | Sem erro interno | `status ≠ 500` |
+| C09 | DN2 | Blue | Polling | M1 | Ciclo completo upload→processo | Processo finaliza | `espera.finalizado === true` |
+| C10 | DN2 | Blue | Contrato | M1 | GET /resultado após finalização | HTTP 200 | `status === 200` |
+| C11 | DN2 | Blue | Contrato | M1 | GET /resultado após finalização | Objeto não vazio com auditorias | `temAuditorias === true` |
+| C12 | DN2 | Blue | Contrato | M1 | GET /resultado após finalização | `processoId` correto no resultado | `resultado.processoId === upload.processoId` |
+| C13 | DN2 | Red | Equivalência | M5 | processoId inexistente | HTTP 404 | `status === 404` |
+| C14 | DN2 | Red | Valor Limite | M5 | processoId inexistente | Sem erro interno | `status ≠ 500` |
+| C15 | DN2 | Red | Equivalência | M6 | processoId malformado | HTTP 4xx | `status ≥ 400 && status < 500` |
+| C16 | DN2 | Red | Regressão | M1 | Resultado imediatamente após upload | Indisponível (pendente) | `status === 404 \|\| status === 202 \|\| temAuditorias === false` |
+| C17 | DN2 | Red | Equivalência | M5+const | auditoriaId inexistente | HTTP 404 | `status === 404` |
+| C18 | DN2 | Red | Valor Limite | M6+const | IDs malformados na rota de auditoria | Sem erro interno | `status ≠ 500` |
+
+**Total**: 8 cenários Blue | 10 cenários Red | 5 testes unitários (sem credenciais)
+
+### Organização dos Arquivos de Teste
 
 ```
 tests/
-├── dn1-upload-confiavel.test.js      ← DN1 Blue: cenário feliz
-├── dn1-upload-sem-processo.test.js   ← DN1 Red: entradas inválidas
-├── dn2-resultado-auditoria.test.js   ← DN2 Blue: ciclo completo
-└── dn2-resultado-auditoria-red.test.js ← DN2 Red: IDs inválidos/processo pendente
+├── dn1-upload-confiavel.test.js        ← C01–C04 (DN1 Blue) + unitários
+├── dn1-upload-sem-processo.test.js     ← C05–C08 (DN1 Red) + unitários
+├── dn2-resultado-auditoria.test.js     ← C09–C12 (DN2 Blue) + unitários
+└── dn2-resultado-auditoria-red.test.js ← C13–C18 (DN2 Red) + unitários
 ```
 
-### Padrão de Aferição (todos os testes seguem este contrato)
+### Padrão de Aferição (contrato de todos os testes)
 
 Cada regra de negócio é codificada com:
-1. **ID rastreável** no nome do `describe`/`test`
+1. **ID rastreável** no nome do `describe`/`test` (ex.: `RN-DN1-02`)
 2. **Evidência** via `console.log` com `processoId`, `status` e `tentativas`
-3. **`test.skip`** automático quando credenciais não estão configuradas (sem falsos negativos)
-4. **`validateStatus: () => true`** no axios para que o teste, não o cliente, decida sobre erros
+3. **`test.skip` automático** quando credenciais não estão configuradas — sem falsos negativos
+4. **`validateStatus: () => true`** no axios — o teste, não o cliente HTTP, decide sobre erros
 
-### Detalhamento dos Cenários de Teste
+### Critérios de Qualidade (Definition of Done)
 
-| Suite | Cenários Blue | Cenários Red | Unit (sem credenciais) |
-|---|---|---|---|
-| DN1 | 4 | 6 | 3 |
-| DN2 | 4 | 6 | 2 |
-| **Total** | **8** | **12** | **5** |
+| Critério | Meta |
+|---|---|
+| Taxa de PASS nos testes unitários | 100% (executam sem credenciais) |
+| Cobertura de cenários Blue por DN | 100% dos cenários felizes mapeados |
+| Cobertura de cenários Red por DN | 100% dos cenários adversários mapeados |
+| Rastreabilidade DN → Regra → Cenário → Teste | Verificável pela tabela acima |
+| Nenhum teste usa dados não-determinísticos | Massas fixas em `test-data/`; IDs adversos são constantes |
 
-### Massas de Teste
-
-| Arquivo | Classe | Uso |
-|---|---|---|
-| `test-data/sped-fiscal.txt` | Válida | Cenários Blue (DN1, DN2) |
-| `test-data/arquivo_vazio.txt` | Adversa | DN1 Red (0 bytes) |
-| `test-data/arquivo_corrompido.bin` | Adversa | DN1 Red (binário) |
-| `test-data/arquivo_estrutura_invalida.txt` | Adversa | DN1 Red (não-SPED) |
-
-### Evidências e Execução
-
-Para executar as aferições:
+### Execução e Geração de Evidências
 
 ```bash
-# Configurar credenciais (copiar e preencher .env.example)
-cp .env.example .env
+# Configurar credenciais
+cp .env.example .env   # preencher APP_KEY, ACCOUNT_KEY e URLs de staging
 
-# Executar todos os testes com saída detalhada
+# Executar todos os testes (unitários + integração se .env preenchido)
 npm run test:verbose
 
-# Executar apenas DN1
+# Executar por DN
 npm run test:dn1
-
-# Executar apenas DN2
 npm run test:dn2
 
-# Gerar relatório HTML em reports/html/report.html
+# Gerar relatório HTML → reports/html/report.html
 npm run test:report
 ```
 
-**Sem credenciais**: os testes de integração (Blue/Red contra a API) são automaticamente pulados (`test.skip`). Os testes unitários (validação de contratos e massas) executam normalmente.
+**Comportamento sem credenciais**: testes de integração são pulados (`skipped`); testes unitários executam normalmente.
+
+```
+Com .env:     Tests: 33 passed
+Sem .env:     Tests: 8 passed, 25 skipped
+```
+
+## 2.3. Implementação em Código: Codificação como Documentação
+
+O princípio central é que **o código de teste é a documentação da regra de negócio**. Cada arquivo de teste é autoexplicativo — um leitor que nunca viu o sistema consegue entender a regra lendo o código.
+
+### Estrutura de Cada Arquivo de Teste
+
+```javascript
+/**
+ * DN1 — Confiabilidade no Upload (Blue Team)        ← Nome do DN e do time
+ *
+ * Direcionador de Negócio:                          ← Contexto de negócio em prosa
+ *   Todo arquivo SPED enviado via POST /upload deve retornar um processoId...
+ *
+ * Regras de negócio aferidas:                       ← IDs rastreáveis
+ *   RN-DN1-01: Upload com arquivo SPED válido retorna HTTP 200/201
+ *   RN-DN1-02: Resposta contém processoId não nulo
+ *
+ * Time: Blue                                        ← Contexto do time
+ * Massa: test-data/sped-fiscal.txt                  ← Massa usada
+ */
+describe('RN-DN1-02 — processoId válido', () => {
+  test('deve retornar processoId não nulo e não vazio', async () => {
+    const resultado = await uploadArquivo(SPED_VALIDO);
+
+    expect(resultado.processoId).toBeTruthy();          // não nulo
+    expect(typeof resultado.processoId).toBe('string'); // tipo correto
+    expect(resultado.processoId.length).toBeGreaterThan(0);
+  });
+});
+```
+
+### Rastreabilidade Ponta a Ponta
+
+```
+[Negócio]         [Código]                        [Evidência]
+DN1               tests/dn1-upload-confiavel.test.js
+  └─ RN-DN1-02      └─ describe('RN-DN1-02...')     → reports/html/report.html
+                        └─ test('deve retornar...')  → PASS/FAIL com console.log
+```
+
+O `utils/api-client.js` serve como **contrato técnico**: cada função documenta em JSDoc qual regra de negócio ela serve (`DN1 / DN3`, `DN2`, etc.), tornando a rastreabilidade legível diretamente no código.
 
 ---
 
